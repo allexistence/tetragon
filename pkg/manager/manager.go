@@ -116,6 +116,22 @@ func (cm *ControllerManager) Start(ctx context.Context) {
 	})
 }
 
+// RegisterControllerWhenCRDReady runs setup once crdName is observed. The
+// wait is a manager Runnable, so registration works before or after
+// Manager.Start. Use this for Reconcilers whose CRD may not yet be installed
+// at agent startup.
+func (cm *ControllerManager) RegisterControllerWhenCRDReady(crdName string, setup func(ctrlManager.Manager) error) error {
+	return cm.Manager.Add(ctrlManager.RunnableFunc(func(ctx context.Context) error {
+		if err := cm.WaitCRDs(ctx, map[string]struct{}{crdName: {}}); err != nil {
+			return fmt.Errorf("waiting for CRD %q: %w", crdName, err)
+		}
+		if err := setup(cm.Manager); err != nil {
+			return fmt.Errorf("registering controller for CRD %q: %w", crdName, err)
+		}
+		return nil
+	}))
+}
+
 func (cm *ControllerManager) GetNamespace(name string) (*corev1.Namespace, error) {
 	ns := corev1.Namespace{}
 	if err := cm.Manager.GetCache().Get(context.Background(), types.NamespacedName{Name: name}, &ns); err != nil {
@@ -368,7 +384,7 @@ func (cm *ControllerManager) addPodInformer() error {
 	// add event handlers to the informer
 	_, err = cm.podInformer.AddEventHandler(cm.deletedPodCache.EventHandler())
 	if err != nil {
-		return nil
+		return err
 	}
 	podhooks.InstallHooks(cm.podInformer)
 	return nil
